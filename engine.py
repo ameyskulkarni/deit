@@ -15,6 +15,12 @@ from timm.utils import accuracy, ModelEma
 from losses import DistillationLoss
 import utils
 
+import torchvision.transforms as transforms
+import matplotlib.pyplot as plt
+import numpy as np
+from torchvision.utils import make_grid
+from PIL import Image
+import torch.nn.functional as F
 
 def train_one_epoch(model: torch.nn.Module, criterion: DistillationLoss,
                     data_loader: Iterable, optimizer: torch.optim.Optimizer,
@@ -78,6 +84,50 @@ def train_one_epoch(model: torch.nn.Module, criterion: DistillationLoss,
     print("Averaged stats:", metric_logger)
     return {k: meter.global_avg for k, meter in metric_logger.meters.items()}
 
+# Function to display original and shuffled images
+def visualize_patch_shuffle(img, shuffled_img):
+    fig, axes = plt.subplots(1, 2, figsize=(10, 5))
+
+    axes[0].imshow(img.permute(1, 2, 0))  # Convert to (H, W, C)
+    axes[0].set_title("Original Image")
+    axes[0].axis("off")
+
+    axes[1].imshow(shuffled_img.permute(1, 2, 0))  # Convert to (H, W, C)
+    axes[1].set_title("Shuffled Patches")
+    axes[1].axis("off")
+
+    plt.show()
+
+def shuffle_patches(images, patch_size=16):
+    """
+    Extracts 16x16 patches from each image, shuffles them, and reconstructs the image.
+
+    Args:
+        images (torch.Tensor): Input batch of images of shape (B, C, H, W).
+        patch_size (int): Size of each patch (default is 16x16).
+
+    Returns:
+        torch.Tensor: Batch of images with shuffled patches, same shape as input.
+    """
+    B, C, H, W = images.shape
+    num_patches = (H // patch_size) * (W // patch_size)  # Total number of patches per image
+    grid_size = H // patch_size  # Number of patches per row/column
+
+    # Step 1: Reshape images into patches (B, num_patches, C, patch_size, patch_size)
+    patches = images.unfold(2, patch_size, patch_size).unfold(3, patch_size, patch_size)
+    patches = patches.permute(0, 2, 3, 1, 4, 5).reshape(B, num_patches, C, patch_size, patch_size)
+
+    # Step 2: Shuffle patches randomly for each image in the batch
+    shuffled_patches = patches.clone()
+    for i in range(B):
+        perm = torch.randperm(num_patches)  # Generate random permutation
+        shuffled_patches[i] = patches[i][perm]  # Shuffle patches
+
+    # Step 3: Reshape back to image format
+    shuffled_patches = shuffled_patches.reshape(B, grid_size, grid_size, C, patch_size, patch_size)
+    shuffled_patches = shuffled_patches.permute(0, 3, 1, 4, 2, 5).reshape(B, C, H, W)
+
+    return shuffled_patches
 
 @torch.no_grad()
 def evaluate(data_loader, model, device):
@@ -95,7 +145,8 @@ def evaluate(data_loader, model, device):
 
         # compute output
         with torch.cuda.amp.autocast():
-            output = model(images)
+            images_shuffled = shuffle_patches(images, patch_size=16)
+            output = model(images_shuffled)
             loss = criterion(output, target)
 
         acc1, acc5 = accuracy(output, target, topk=(1, 5))
