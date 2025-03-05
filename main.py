@@ -10,6 +10,7 @@ import json
 
 from pathlib import Path
 
+import timm
 from timm.data import Mixup
 from timm.models import create_model
 from timm.loss import LabelSmoothingCrossEntropy, SoftTargetCrossEntropy
@@ -80,6 +81,12 @@ def get_args_parser():
                         help='warmup learning rate (default: 1e-6)')
     parser.add_argument('--min-lr', type=float, default=1e-5, metavar='LR',
                         help='lower lr bound for cyclic schedulers that hit 0 (1e-5)')
+    parser.add_argument('--cosine_annealing_warmup', default=False, type=bool, metavar='SCHEDULER',
+                        help='If to use cosine annealing warmup or not (Default: False)')
+    parser.add_argument('--cosine_annealing_cycle_len', type=int, default=100, metavar='LR',
+                        help='length of the cosine annealing cycle (default: 100)')
+    parser.add_argument('--cosine_annealing_min_lr', type=float, default=5e-7, metavar='LR',
+                        help='lowest lr in the cosine annealing warmup cycle (default: 5e-7)')
 
     parser.add_argument('--decay-epochs', type=float, default=30, metavar='N',
                         help='epoch interval to decay LR')
@@ -91,7 +98,6 @@ def get_args_parser():
                         help='patience epochs for Plateau LR scheduler (default: 10')
     parser.add_argument('--decay-rate', '--dr', type=float, default=0.1, metavar='RATE',
                         help='LR decay rate (default: 0.1)')
-
     # Augmentation parameters
     parser.add_argument('--color-jitter', type=float, default=0.3, metavar='PCT',
                         help='Color jitter factor (default: 0.3)')
@@ -352,7 +358,30 @@ def main(args):
     optimizer = create_optimizer(args, model_without_ddp)
     loss_scaler = NativeScaler()
 
-    lr_scheduler, _ = create_scheduler(args, optimizer)
+    # if not args.cosine_annealing_warmup:
+    #     lr_scheduler, _ = create_scheduler(args, optimizer)
+    # else:
+    # Create Cosine Annealing Warmup Restart Scheduler
+    lr_scheduler = timm.scheduler.CosineLRScheduler(
+        optimizer,
+        t_initial=300,  # First restart after T_0 epochs
+        lr_min=5e-8,  # Minimum learning rate
+        warmup_t=15,  # Warmup duration
+        warmup_lr_init=1e-6,  # Initial LR for warmup
+        warmup_prefix=True,  # Warmup applied before cosine
+        cycle_limit=0,  # Infinite restarts
+        t_in_epochs=True  # Update per epoch
+    )
+        # lr_scheduler = timm.scheduler.CosineLRScheduler(
+        #     optimizer,
+        #     t_initial=args.cosine_annealing_cycle_len,  # First restart after T_0 epochs
+        #     lr_min=args.cosine_annealing_min_lr,  # Minimum learning rate
+        #     warmup_t=2,  # Warmup duration
+        #     warmup_lr_init=1e-6,  # Initial LR for warmup
+        #     warmup_prefix=True,  # Warmup applied before cosine
+        #     cycle_limit=0,  # Infinite restarts
+        #     t_in_epochs=True  # Update per epoch
+        # )
 
     criterion = LabelSmoothingCrossEntropy()
 
