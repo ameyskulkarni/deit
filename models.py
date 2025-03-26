@@ -13,7 +13,7 @@ __all__ = [
     'deit_tiny_patch16_224', 'deit_small_patch16_224', 'deit_base_patch16_224',
     'deit_tiny_distilled_patch16_224', 'deit_small_distilled_patch16_224',
     'deit_base_distilled_patch16_224', 'deit_base_patch16_384',
-    'deit_base_distilled_patch16_384',
+    'deit_base_distilled_patch16_384', 'deit_tiny_no_positional_encoding'
 ]
 
 
@@ -58,6 +58,36 @@ class DistilledVisionTransformer(VisionTransformer):
             # during inference, return the average of both classifier predictions
             return (x + x_dist) / 2
 
+@register_model
+def deit_tiny_no_positional_encoding(pretrained=False, **kwargs):
+    class NoPositionalVisionTransformer(VisionTransformer):
+        def __init__(self, *args, **kwargs):
+            super().__init__(*args, **kwargs)
+            # Remove positional embedding
+            self.pos_drop = nn.Identity()  # Replace pos_drop with Identity layer
+
+            # Optionally, you can also zero out the position_embedding if it exists
+            if hasattr(self, 'pos_embed'):
+                nn.init.zeros_(self.pos_embed)
+
+    model = NoPositionalVisionTransformer(
+        patch_size=16, embed_dim=192, depth=12, num_heads=3, mlp_ratio=4, qkv_bias=True,
+        norm_layer=partial(nn.LayerNorm, eps=1e-6), **kwargs)
+
+    model.default_cfg = _cfg()
+
+    if pretrained:
+        checkpoint = torch.hub.load_state_dict_from_url(
+            url="https://dl.fbaipublicfiles.com/deit/deit_tiny_patch16_224-a1311bcf.pth",
+            map_location="cpu", check_hash=True
+        )
+        # Remove positional embedding from state dict if loading a pretrained model
+        if 'pos_embed' in checkpoint['model']:
+            del checkpoint['model']['pos_embed']
+
+        model.load_state_dict(checkpoint["model"], strict=False)
+
+    return model
 
 @register_model
 def deit_tiny_patch16_224(pretrained=False, **kwargs):
