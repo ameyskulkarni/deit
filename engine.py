@@ -33,7 +33,7 @@ def train_one_epoch(model: torch.nn.Module, criterion: DistillationLoss,
     for h in range(H):
         for w in range(W):
             positions.append([h, w])
-    patch_positions = torch.tensor(positions, device=next(model.parameters()).device)
+    patch_positions = torch.tensor(positions, device=(model.parameters()).device)
     
     if args.cosub:
         criterion = torch.nn.BCEWithLogitsLoss()
