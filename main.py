@@ -28,6 +28,8 @@ import models_v2
 
 import utils
 
+from shape_biased_attention import *
+
 
 def get_args_parser():
     parser = argparse.ArgumentParser('DeiT training and evaluation script', add_help=False)
@@ -185,8 +187,28 @@ def get_args_parser():
     parser.add_argument('--world_size', default=1, type=int,
                         help='number of distributed processes')
     parser.add_argument('--dist_url', default='env://', help='url used to set up distributed training')
+
+    # Shape bias penalty params
+    parser.add_argument('--alpha', type=float, default=1.0,
+                        help='Shape bias penalty alpha. The param will be ineffective if it is 1.0. Penalty will reduce if it is < 1 until 0. (default: 1.0)')
+    parser.add_argument('--dist_scale', type=float, default=0.0,
+                        help='Dist scale penalty. The param will be ineffective if it is 0.0. Penalty will increase if it is > 0. (default: 0.0)')
+    parser.add_argument('--penalty_radius', type=float, default=None,
+                        help='(default: None)')
+
     return parser
 
+
+def modify_deit_for_shape_bias(model):
+    # Get the penultimate transformer block
+    penultimate_block = model.blocks[-1]
+
+    # Replace the attention module with our custom module
+    original_attn = penultimate_block.attn
+    shape_bias_attn = ShapeBiasAttention(original_attn)
+    penultimate_block.attn = shape_bias_attn
+
+    return model
 
 def main(args):
     utils.init_distributed_mode(args)
@@ -270,6 +292,8 @@ def main(args):
         img_size=args.input_size
     )
 
+    model = modify_deit_for_shape_bias(model).to(device)
+    print(model)
                     
     if args.finetune:
         if args.finetune.startswith('https'):
@@ -427,6 +451,7 @@ def main(args):
             args.clip_grad, model_ema, mixup_fn,
             set_training_mode=args.train_mode,  # keep in eval mode for deit finetuning / train mode for training and deit III finetuning
             args = args,
+            alpha=args.alpha, dist_scale=args.dist_scale, limit_radius=None,
         )
 
         lr_scheduler.step(epoch)

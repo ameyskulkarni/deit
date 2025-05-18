@@ -20,12 +20,20 @@ def train_one_epoch(model: torch.nn.Module, criterion: DistillationLoss,
                     data_loader: Iterable, optimizer: torch.optim.Optimizer,
                     device: torch.device, epoch: int, loss_scaler, max_norm: float = 0,
                     model_ema: Optional[ModelEma] = None, mixup_fn: Optional[Mixup] = None,
-                    set_training_mode=True, args = None):
+                    set_training_mode=True, args = None, alpha=1.0, dist_scale=1.0, limit_radius=None):
     model.train(set_training_mode)
     metric_logger = utils.MetricLogger(delimiter="  ")
     metric_logger.add_meter('lr', utils.SmoothedValue(window_size=1, fmt='{value:.6f}'))
     header = 'Epoch: [{}]'.format(epoch)
     print_freq = 10
+
+    # Generate patch positions (static for all images with same size)
+    H = W = int(math.sqrt(model.patch_embed.num_patches))
+    positions = []
+    for h in range(H):
+        for w in range(W):
+            positions.append([h, w])
+    patch_positions = torch.tensor(positions, device=next(model.parameters()).device)
     
     if args.cosub:
         criterion = torch.nn.BCEWithLogitsLoss()
@@ -33,6 +41,22 @@ def train_one_epoch(model: torch.nn.Module, criterion: DistillationLoss,
     for samples, targets in metric_logger.log_every(data_loader, print_freq, header):
         samples = samples.to(device, non_blocking=True)
         targets = targets.to(device, non_blocking=True)
+
+        # Extract patch embeddings for all images in the batch
+        with torch.no_grad():
+            # Apply patch embedding without position embedding
+            batch_patch_embeddings = model.patch_embed(samples)  # Shape: [B, num_patches, embedding_dim]
+
+        # Access the custom attention module in the penultimate layer
+        shape_bias_attn = model.blocks[-1].attn
+
+        # Set shape bias parameters
+        shape_bias_attn.alpha = alpha
+        shape_bias_attn.dist_scale = dist_scale
+        shape_bias_attn.limit_penalty_radius_to = limit_radius
+        shape_bias_attn.patch_positions = patch_positions
+        shape_bias_attn.batch_patch_embeddings = batch_patch_embeddings
+        shape_bias_attn.apply_shape_bias = True
 
         if mixup_fn is not None:
             samples, targets = mixup_fn(samples, targets)
@@ -92,6 +116,17 @@ def evaluate(data_loader, model, device):
     for images, target in metric_logger.log_every(data_loader, 10, header):
         images = images.to(device, non_blocking=True)
         target = target.to(device, non_blocking=True)
+
+        # Access the custom attention module in the penultimate layer
+        shape_bias_attn = model.blocks[-1].attn
+
+        # Set shape bias parameters
+        shape_bias_attn.alpha = 1.0
+        shape_bias_attn.dist_scale = 0.0
+        shape_bias_attn.limit_penalty_radius_to = None
+        shape_bias_attn.patch_positions = None
+        shape_bias_attn.batch_patch_embeddings = None
+        shape_bias_attn.apply_shape_bias = False
 
         # compute output
         with torch.cuda.amp.autocast():
