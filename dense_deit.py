@@ -89,11 +89,19 @@ class DeiTWithDenseCL(nn.Module):
     @torch.no_grad()
     def _dequeue_and_enqueue(self, keys):
         """Update queue of negative samples"""
+        # keys should be [num_patches * batch_size, dim]
         batch_size = keys.shape[0]
         ptr = int(self.queue_ptr)
 
-        # Replace the keys at ptr
-        self.queue[:, ptr:ptr + batch_size] = keys.T
+        # Ensure we don't exceed queue size
+        if ptr + batch_size > self.queue_size:
+            # Split the update if it would overflow
+            remaining_space = self.queue_size - ptr
+            self.queue[:, ptr:] = keys[:remaining_space].T
+            self.queue[:, :batch_size - remaining_space] = keys[remaining_space:].T
+        else:
+            # Normal case
+            self.queue[:, ptr:ptr + batch_size] = keys.T
 
         # Move pointer
         ptr = (ptr + batch_size) % self.queue_size
@@ -120,9 +128,9 @@ class DeiTWithDenseCL(nn.Module):
     def forward_encoder_q(self, x):
         """Forward pass through query encoder"""
         # Forward through the transformer
-        print(f"Shape of x before forward_features: {x.shape}")
+        # print(f"Shape of x before forward_features: {x.shape}")
         x = self.encoder_q.forward_features(x)
-        print(f"Shape of x after forward_features: {x.shape}")
+        # print(f"Shape of x after forward_features: {x.shape}")
 
         # Get patch tokens (excluding cls token)
         patch_tokens = self._get_patch_tokens(x, cls_token=False)
@@ -211,8 +219,11 @@ class DeiTWithDenseCL(nn.Module):
             densecl_loss = self.dense_contrastive_loss(dense_q, dense_k)
             result["densecl_loss"] = densecl_loss
 
-            # Update queue
-            self._dequeue_and_enqueue(dense_k.reshape(-1, dense_k.shape[-1]))
+            # Update queue - flatten patch dimensions properly
+            # dense_k shape: [batch_size, num_patches, dim]
+            # We want: [batch_size * num_patches, dim] for queue update
+            dense_k_flat = dense_k.reshape(-1, dense_k.shape[-1])
+            self._dequeue_and_enqueue(dense_k_flat)
 
         return result
 
@@ -261,7 +272,7 @@ class DeiTDenseCLTrainer:
 
             # Forward pass
             output = self.model(inputs_q, inputs_k, is_train=True)
-            print(f"Output from the models keys : {output.keys()}")
+            # print(f"Output from the models keys : {output.keys()}")
             logits = output["logits"]
 
             # Classification loss (supervised)
